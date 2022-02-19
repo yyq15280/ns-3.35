@@ -63,7 +63,9 @@ WifiMacQueue::GetTypeId (void)
 }
 
 WifiMacQueue::WifiMacQueue (AcIndex ac)
-  : m_ac (ac),
+  : m_sendBytes (0),
+    m_receiveBytes (0),
+    m_ac (ac),
     NS_LOG_TEMPLATE_DEFINE ("WifiMacQueue")
 {
 }
@@ -535,6 +537,7 @@ WifiMacQueue::DoDequeue (ConstIterator pos)
     }
 
   Ptr<WifiMacQueueItem> item = Queue<WifiMacQueueItem>::DoDequeue (pos);
+  m_sendBytes += item->GetSize();
 
   if (item != 0 && item->GetHeader ().IsQosData ())
     {

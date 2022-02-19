@@ -470,6 +470,10 @@ private:
    * \return The corresponding PPP protocol number
    */
   static uint16_t EtherToPpp (uint16_t protocol);
+
+public:
+  uint64_t m_sendBytes;
+  uint64_t m_receiveBytes;
 };
 
 } // namespace ns3

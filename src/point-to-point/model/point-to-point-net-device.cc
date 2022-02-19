@@ -177,7 +177,9 @@ PointToPointNetDevice::PointToPointNetDevice ()
     m_txMachineState (READY),
     m_channel (0),
     m_linkUp (false),
-    m_currentPkt (0)
+    m_currentPkt (0),
+    m_sendBytes (0),
+    m_receiveBytes (0)
 {
   NS_LOG_FUNCTION (this);
 }
@@ -259,6 +261,9 @@ PointToPointNetDevice::TransmitStart (Ptr<Packet> p)
     {
       m_phyTxDropTrace (p);
     }
+  else {
+    m_sendBytes += p->GetSize();
+  }
   return result;
 }
 
@@ -358,6 +363,7 @@ PointToPointNetDevice::Receive (Ptr<Packet> packet)
       // headers.
       //
       Ptr<Packet> originalPacket = packet->Copy ();
+      m_receiveBytes += packet->GetSize();
 
       //
       // Strip off the point-to-point protocol header and forward this packet

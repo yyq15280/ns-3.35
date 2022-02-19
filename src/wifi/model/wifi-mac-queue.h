@@ -81,6 +81,9 @@ public:
     DROP_OLDEST
   };
 
+  uint64_t m_sendBytes;
+  uint64_t m_receiveBytes;
+
   /// allow the usage of iterators and const iterators
   using Queue<WifiMacQueueItem>::ConstIterator;
   using Queue<WifiMacQueueItem>::Iterator;

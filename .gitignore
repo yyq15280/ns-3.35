@@ -6,3 +6,6 @@ build
 .waf*
 .lock*
 *.pyc
+
+# result
+result
