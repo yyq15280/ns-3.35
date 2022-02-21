@@ -49,10 +49,22 @@ static void TraceThput (string thput_tr_file_name, Ptr<PointToPointNetDevice> de
 
 
 int main (int argc, char *argv[]) {   
-    Config::SetDefault ("ns3::WifiMacQueue::MaxSize", QueueSizeValue (QueueSize ("8000p")));
-    Config::SetDefault ("ns3::WifiMacQueue::MaxDelay", TimeValue (MilliSeconds (1000)));
+    uint32_t cc_mode = 0;
 
-    Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpNewReno"));
+    // Config::SetDefault ("ns3::WifiMacQueue::MaxSize", QueueSizeValue (QueueSize ("8000p")));  // default 500p 
+    // Config::SetDefault ("ns3::WifiMacQueue::MaxDelay", TimeValue (MilliSeconds (1000)));
+
+    if (cc_mode == 0) {
+        Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpNewReno"));        
+    }
+    else if (cc_mode == 1) {
+        Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpCubic")); 
+        Config::SetDefault ("ns3::TcpSocketBase::UseEcn", StringValue ("On"));
+        Config::SetDefault ("ns3::RedQueueDisc::UseEcn", BooleanValue (true));
+        Config::SetDefault ("ns3::RedQueueDisc::UseHardDrop", BooleanValue (false));
+        Config::SetDefault ("ns3::RedQueueDisc::Gentle", BooleanValue (false));
+        Config::SetDefault ("ns3::RedQueueDisc::QW", DoubleValue (1)); // instant queue
+    }    
     Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (10));
     Config::SetDefault ("ns3::TcpSocket::SndBufSize", UintegerValue (67108864));
     Config::SetDefault ("ns3::TcpSocket::RcvBufSize", UintegerValue (67108864));
@@ -183,8 +195,22 @@ int main (int argc, char *argv[]) {
     TrafficControlHelper tch;
     uint16_t handle = tch.SetRootQueueDisc ("ns3::MqQueueDisc");
     TrafficControlHelper::ClassIdList cls = tch.AddQueueDiscClasses (handle, 4, "ns3::QueueDiscClass");
-    tch.AddChildQueueDiscs (handle, cls, "ns3::FifoQueueDisc");
+    if (cc_mode == 0) {
+        tch.AddChildQueueDiscs (handle, cls, "ns3::FifoQueueDisc");
+    }
+    else if (cc_mode == 1) {
+        tch.AddChildQueueDiscs (handle, cls, "ns3::RedQueueDisc");
+    }   
     tch.Install (ap_devices[0]);
+    Ptr<QueueDisc> root_qdisc = ap.Get(0)->GetObject<TrafficControlLayer> ()->GetRootQueueDiscOnDevice(ap_devices[0].Get(0));
+    if (cc_mode == 0) {
+        root_qdisc->GetQueueDiscClass (0)->GetQueueDisc () -> SetMaxSize (QueueSize("7500p"));
+    }
+    else if (cc_mode == 1) {
+        root_qdisc->GetQueueDiscClass (0)->GetQueueDisc () -> SetMaxSize (QueueSize("7500p"));
+        root_qdisc->GetQueueDiscClass (0)->GetQueueDisc () -> SetAttribute ("MinTh", DoubleValue (150));
+        root_qdisc->GetQueueDiscClass (0)->GetQueueDisc () -> SetAttribute ("MaxTh", DoubleValue (150));        
+    }
 
 
     // assign IP address
@@ -215,7 +241,7 @@ int main (int argc, char *argv[]) {
     // End create topo
 
     // Start create flow
-    double simulationTime = 2;  // seconds
+    double simulationTime = 8;  // seconds
     double appStartTime = 2.0;
     vector<ApplicationContainer> sinkAppA(ap_num);
     vector<ApplicationContainer> sourceAppA(ap_num);
@@ -244,16 +270,14 @@ int main (int argc, char *argv[]) {
     Ptr<WifiNetDevice> device2 = DynamicCast<WifiNetDevice>(ap_devices[0].Get(0));
     // Simulator::Schedule(Seconds(intvl), &RateByWifiNetDevice, device2, 1, intvl);
 
-    Ptr<QueueDisc> root = ap.Get(0)->GetObject<TrafficControlLayer> ()->GetRootQueueDiscOnDevice(ap_devices[0].Get(0));
-    // root->GetQueueDiscClass (0)->GetQueueDisc () -> SetMaxSize (QueueSize("1024p"));
-
     Simulator::Schedule (Seconds (appStartTime + 0.00001), &TraceRtt, "result/rtt.data");
     qlenOutput.open ("result/qlen.data"); 
     Ptr<ns3::WifiMacQueue> queue = DynamicCast<RegularWifiMac>(device2->GetMac())->GetTxopQueue(AC_BE);
-    queue->TraceConnectWithoutContext ("PacketsInQueue", MakeBoundCallback (&DevicePacketsInQueueTrace, root));
+    queue->TraceConnectWithoutContext ("PacketsInQueue", MakeBoundCallback (&DevicePacketsInQueueTrace, root_qdisc));
     
     // void printCurrentSize(Ptr<QueueDisc> root);    
     // Simulator::Schedule(Seconds(0.1), &printCurrentSize, root);
+
     // End Trace
 
     // Start Run Simulation
@@ -264,6 +288,10 @@ int main (int argc, char *argv[]) {
     std::cout<<"Simulate time : "<<end-start<<" seconds"<<std::endl;
     Simulator::Destroy();
     // End Run Simulation
+
+    uint64_t rxBytes = DynamicCast<PacketSink> (sinkAppA[0].Get (0))->GetTotalRx ();  // pure data: 1448B per packet
+    double throughput = (rxBytes * 8) / (simulationTime * 1000000.0); //Mbit/s
+    std::cout<<"Receive APP throughput : "<< throughput <<" Mbps"<<std::endl;
 
     return 0;
 }
