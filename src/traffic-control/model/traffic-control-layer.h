@@ -26,8 +26,22 @@
 #include "ns3/queue-item.h"
 #include <map>
 #include <vector>
+#include "ns3/tcp-header.h"
+#include "ns3/random-variable-stream.h"
+#include <unordered_map>
+#include "ns3/wifi-module.h"
 
 namespace ns3 {
+
+class FlowState : public Object {
+public:
+	static TypeId GetTypeId (void);
+	FlowState();
+
+	uint32_t m_windowSize;
+  bool m_isSlowStart;
+  SequenceNumber32 m_reduceSeq;
+};
 
 class Packet;
 class QueueDisc;
@@ -254,6 +268,57 @@ private:
   /// Map storing the required information for each device with a queue disc installed
   std::map<Ptr<NetDevice>, NetDeviceInfo> m_netDevices;
   ProtocolHandlerList m_handlers;  //!< List of upper-layer handlers
+
+  void ModifyRwnd (Ptr<QueueDiscItem> item, Ptr<QueueDisc> qDisc, Ptr<NetDevice> device);
+  uint16_t CalcRwnd (TcpHeader& tcpHeader, uint16_t flowID);
+  void UpdateAlpha (TcpHeader& tcpHeader, uint16_t flowID);
+  void UpdateBeta(void);
+  
+  uint32_t m_ccmode;
+  double m_c;               //!< Cubic Scaling factor
+  uint16_t m_flowNumber;
+  double m_g;
+  bool m_isProbMark;        //!< probability mark
+  double m_Pmax;
+  uint32_t m_Kmax;
+  uint32_t m_Kmin;
+  uint32_t m_MSS;
+
+  std::vector<uint32_t> m_windowSize;
+  std::vector<bool> m_isSlowStart;
+  std::vector<uint32_t> m_Wmax;
+  std::vector<uint32_t> m_Wmin;
+  std::vector<Time> m_epochStart;        //!<  Beginning of an epoch
+  std::vector<SequenceNumber32> m_updateSeq;
+  std::vector<SequenceNumber32> m_reduceSeq;
+  std::vector<uint32_t> m_totalPackets;
+  std::vector<uint32_t> m_markedPackets;
+  std::vector<double> m_alpha;
+  std::vector<bool> m_isCongestion;
+  std::vector<bool> m_canCalcRtt;
+  std::vector<SequenceNumber32> m_calcRttSeqNum;
+  std::vector<Time> m_calcRttStartTime;
+  std::vector<double> m_rtt;
+  std::vector<double> m_beta;
+  std::vector<double> m_rate;
+
+  Ptr<UniformRandomVariable> m_uv;  //!< rng stream
+
+
+  // APCC
+  std::unordered_map<uint64_t, Ptr<FlowState> > m_flowTable; // mapping from uint64_t to flow state
+  Ptr<FlowState> GetFlow(uint32_t sip, uint16_t sport, bool create); // get a flow
+  void UseAPCC(Ptr<QueueDiscItem> item, Ptr<QueueDisc> qDisc, Ptr<NetDevice> device); 
+  uint16_t CalcRwndAPCC (Ptr<FlowState> flow, TcpHeader& tcpHeader);
+  void calcTargetRate(uint32_t qLen);
+  void calcTotalDqRate(Ptr<ns3::WifiMacQueue> queue);
+
+  double m_eta;
+  uint32_t m_tau;  // ms
+  double m_targetRate;
+  double m_totalDqRate;
+  uint64_t m_lastSendBytes;
+  double m_lastSendTime;
 };
 
 } // namespace ns3

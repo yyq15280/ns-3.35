@@ -49,9 +49,9 @@ static void TraceThput (string thput_tr_file_name, Ptr<PointToPointNetDevice> de
 
 
 int main (int argc, char *argv[]) {   
-    uint32_t cc_mode = 0;
+    uint32_t cc_mode = 3;
 
-    // Config::SetDefault ("ns3::WifiMacQueue::MaxSize", QueueSizeValue (QueueSize ("8000p")));  // default 500p 
+    // Config::SetDefault ("ns3::WifiMacQueue::MaxSize", QueueSizeValue (QueueSize ("100p")));  // default 500p 
     // Config::SetDefault ("ns3::WifiMacQueue::MaxDelay", TimeValue (MilliSeconds (1000)));
 
     if (cc_mode == 0) {
@@ -65,6 +65,13 @@ int main (int argc, char *argv[]) {
         Config::SetDefault ("ns3::RedQueueDisc::Gentle", BooleanValue (false));
         Config::SetDefault ("ns3::RedQueueDisc::QW", DoubleValue (1)); // instant queue
     }    
+    else if (cc_mode == 2) {
+        Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpCubic")); 
+        Config::SetDefault ("ns3::TcpSocketBase::UseEcn", StringValue ("On"));
+    }
+    else if (cc_mode == 3) {
+        Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpNewReno")); 
+    }
     Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (10));
     Config::SetDefault ("ns3::TcpSocket::SndBufSize", UintegerValue (67108864));
     Config::SetDefault ("ns3::TcpSocket::RcvBufSize", UintegerValue (67108864));
@@ -201,15 +208,31 @@ int main (int argc, char *argv[]) {
     else if (cc_mode == 1) {
         tch.AddChildQueueDiscs (handle, cls, "ns3::RedQueueDisc");
     }   
+    else if (cc_mode == 2) {
+        tch.AddChildQueueDiscs (handle, cls, "ns3::FifoQueueDisc");
+    } 
+    else if (cc_mode == 3) {
+        tch.AddChildQueueDiscs (handle, cls, "ns3::FifoQueueDisc");
+    } 
     tch.Install (ap_devices[0]);
     Ptr<QueueDisc> root_qdisc = ap.Get(0)->GetObject<TrafficControlLayer> ()->GetRootQueueDiscOnDevice(ap_devices[0].Get(0));
+    root_qdisc->GetQueueDiscClass (0)->GetQueueDisc () -> SetMaxSize (QueueSize("7500p"));
     if (cc_mode == 0) {
-        root_qdisc->GetQueueDiscClass (0)->GetQueueDisc () -> SetMaxSize (QueueSize("7500p"));
+        
     }
     else if (cc_mode == 1) {
-        root_qdisc->GetQueueDiscClass (0)->GetQueueDisc () -> SetMaxSize (QueueSize("7500p"));
         root_qdisc->GetQueueDiscClass (0)->GetQueueDisc () -> SetAttribute ("MinTh", DoubleValue (150));
         root_qdisc->GetQueueDiscClass (0)->GetQueueDisc () -> SetAttribute ("MaxTh", DoubleValue (150));        
+    }
+    else if (cc_mode == 2) {
+        Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer> ();
+        tc->SetAttribute("Ccmode", UintegerValue (2));
+        tc->SetAttribute("Kmin", UintegerValue (500));
+    }
+    else if (cc_mode == 3) {
+        Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer> ();
+        tc->SetAttribute("Ccmode", UintegerValue (3));
+        tc->SetAttribute("Kmin", UintegerValue (200));
     }
 
 
@@ -241,7 +264,7 @@ int main (int argc, char *argv[]) {
     // End create topo
 
     // Start create flow
-    double simulationTime = 8;  // seconds
+    double simulationTime = 5;  // seconds
     double appStartTime = 2.0;
     vector<ApplicationContainer> sinkAppA(ap_num);
     vector<ApplicationContainer> sourceAppA(ap_num);
@@ -264,7 +287,7 @@ int main (int argc, char *argv[]) {
 
     // Start Trace
     Ptr<PointToPointNetDevice> device1 = DynamicCast<PointToPointNetDevice>(p2p_1_devices.Get(0));
-    double intvl = 0.1;
+    double intvl = 0.05;
     Simulator::Schedule(Seconds(intvl), &TraceThput, "result/thput.data", device1, 0, intvl);
     // void RateByWifiNetDevice(Ptr<WifiNetDevice> device, int no, double interval);
     Ptr<WifiNetDevice> device2 = DynamicCast<WifiNetDevice>(ap_devices[0].Get(0));

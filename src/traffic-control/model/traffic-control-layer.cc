@@ -25,6 +25,12 @@
 #include "ns3/socket.h"
 #include "ns3/queue-disc.h"
 #include <tuple>
+#include "ns3/tcp-header.h"
+#include "ns3/ipv4-header.h"
+#include "ns3/simulator.h"
+#include "ns3/ipv4-packet-filter.h"
+#include "ns3/ipv4-queue-disc-item.h"
+#include "ns3/wifi-module.h"
 
 namespace ns3 {
 
@@ -32,6 +38,27 @@ NS_LOG_COMPONENT_DEFINE ("TrafficControlLayer");
 
 NS_OBJECT_ENSURE_REGISTERED (TrafficControlLayer);
 
+/******************
+ * FlowState
+ *****************/
+TypeId FlowState::GetTypeId (void)
+{
+	static TypeId tid = TypeId ("ns3::FlowState")
+		.SetParent<Object> ()
+		;
+	return tid;
+}
+
+FlowState::FlowState(){
+	m_windowSize = 10;
+	m_isSlowStart = true;
+  m_reduceSeq = SequenceNumber32(0);
+}
+
+
+/***********************
+ * TrafficControlLaye
+ **********************/
 TypeId
 TrafficControlLayer::GetTypeId (void)
 {
@@ -44,6 +71,52 @@ TrafficControlLayer::GetTypeId (void)
                    MakeObjectMapAccessor (&TrafficControlLayer::GetNDevices,
                                           &TrafficControlLayer::GetRootQueueDiscOnDeviceByIndex),
                    MakeObjectMapChecker<QueueDisc> ())
+    .AddAttribute ("Ccmode",
+                   "True to modify window field in TCP header",
+                   UintegerValue (0),
+                   MakeUintegerAccessor (&TrafficControlLayer::m_ccmode),
+                   MakeUintegerChecker <uint32_t> ())
+                       .AddAttribute ("C", "Cubic Scaling factor",
+                   DoubleValue (10000),
+                   MakeDoubleAccessor (&TrafficControlLayer::m_c),
+                   MakeDoubleChecker <double> (0.0))
+    .AddAttribute ("FlowNumber", "Basic flow add burst flow",
+                   UintegerValue (21),
+                   MakeUintegerAccessor (&TrafficControlLayer::m_flowNumber),
+                   MakeUintegerChecker <uint16_t> ())
+    .AddAttribute ("g", "the weight given to new samples against the past in the estimation of alpha",
+                   DoubleValue (0.0625),
+                   MakeDoubleAccessor (&TrafficControlLayer::m_g),
+                   MakeDoubleChecker <double> (0.0))
+    .AddAttribute ("IsProbMark",
+                   "True to use probability mark",
+                   BooleanValue (false),
+                   MakeBooleanAccessor (&TrafficControlLayer::m_isProbMark),
+                   MakeBooleanChecker ())
+    .AddAttribute ("Pmax", "the maximum marking probability",
+                   DoubleValue (1.0),
+                   MakeDoubleAccessor (&TrafficControlLayer::m_Pmax),
+                   MakeDoubleChecker <double> (0.0))
+    .AddAttribute ("Kmax", "the maximum marking threshold",
+                   UintegerValue (105),
+                   MakeUintegerAccessor (&TrafficControlLayer::m_Kmax),
+                   MakeUintegerChecker <uint32_t> ())
+    .AddAttribute ("Kmin", "the minimum mark threshold",
+                   UintegerValue (20),
+                   MakeUintegerAccessor (&TrafficControlLayer::m_Kmin),
+                   MakeUintegerChecker <uint32_t> ())
+    .AddAttribute ("MSS", "maximum segment size",
+                   UintegerValue (1448),
+                   MakeUintegerAccessor (&TrafficControlLayer::m_MSS),
+                   MakeUintegerChecker <uint32_t> ())
+    .AddAttribute ("Eta", "maximum segment size",
+                   DoubleValue (0.99),
+                   MakeDoubleAccessor (&TrafficControlLayer::m_eta),
+                   MakeDoubleChecker <double> (0.0))
+    .AddAttribute ("Tau", "reduce the queue from qLen to Kmin after Tau time, ms",
+                   UintegerValue (100),
+                   MakeUintegerAccessor (&TrafficControlLayer::m_tau),
+                   MakeUintegerChecker <uint32_t> ())
   ;
   return tid;
 }
@@ -90,6 +163,32 @@ TrafficControlLayer::DoInitialize (void)
           ndi.second.m_rootQueueDisc->Initialize ();
         }
     }
+
+  for(uint32_t i = 0; i < m_flowNumber; i++)
+  {
+    m_windowSize.push_back(10);  // MSS
+    m_isSlowStart.push_back(true);
+    m_Wmax.push_back(0);
+    m_Wmin.push_back(0);
+    m_epochStart.push_back(Time::Min ());
+    m_updateSeq.push_back(SequenceNumber32(9*1448+1));
+    m_reduceSeq.push_back(SequenceNumber32(0));
+    m_totalPackets.push_back(0);
+    m_markedPackets.push_back(0);
+    m_alpha.push_back(0.0);
+    m_isCongestion.push_back(false);
+    m_canCalcRtt.push_back(true);
+    m_calcRttSeqNum.push_back(SequenceNumber32(0));
+    m_calcRttStartTime.push_back(Time::Min ());
+    m_rtt.push_back(-1.0);
+    m_beta.push_back(1.0);
+    m_rate.push_back(-1.0);
+  }
+
+  m_targetRate = 650;
+  m_totalDqRate = 0.0;
+  m_lastSendBytes = 0;
+  m_lastSendTime = 2.0;
 
   Object::DoInitialize ();
 }
@@ -339,6 +438,294 @@ TrafficControlLayer::Receive (Ptr<NetDevice> device, Ptr<const Packet> p,
 }
 
 void
+TrafficControlLayer::ModifyRwnd (Ptr<QueueDiscItem> item, Ptr<QueueDisc> qDisc, Ptr<NetDevice> device)
+{
+  TcpHeader tcpHdr;
+  item->GetPacket ()->PeekHeader (tcpHdr);
+
+  // Three-way Handshake, SYN->(SYN,ACK)->ACK, then all data packets have ACK flag
+  if (tcpHdr.GetFlags () & TcpHeader::ACK && !(tcpHdr.GetFlags () & TcpHeader::SYN)) {
+    // empty packet, namely the real ACK
+    if (item->GetPacket()->GetSize() == 4*tcpHdr.GetLength()) {
+      uint16_t flowID = tcpHdr.GetSourcePort () - 50000;
+      if (flowID < m_flowNumber)
+      {       
+        item->GetPacket ()->RemoveHeader (tcpHdr);
+        uint16_t rwndsize = CalcRwnd(tcpHdr, flowID);
+        tcpHdr.SetWindowSize(rwndsize);
+        item->GetPacket ()->AddHeader (tcpHdr);
+
+        if (m_canCalcRtt[flowID])
+        {
+          m_calcRttSeqNum[flowID] = tcpHdr.GetAckNumber () + (m_windowSize[flowID] - 1) * 1448;
+          m_calcRttStartTime[flowID] = Simulator::Now();
+          m_canCalcRtt[flowID] = false;
+        }
+      }       
+    }
+    else {
+      uint16_t flowID = tcpHdr.GetDestinationPort () - 50000;
+      m_totalPackets[flowID]+=1;
+      
+      if (!m_canCalcRtt[flowID])
+      {
+        if (tcpHdr.GetSequenceNumber() >= m_calcRttSeqNum[flowID])
+        {
+          double rtt_tmp = Simulator::Now().GetSeconds() - m_calcRttStartTime[flowID].GetSeconds();
+          if (rtt_tmp > 0.008) 
+          {
+            rtt_tmp += 0.001;  // add 1ms because of wifi propagation delay
+            if (m_rtt[flowID] < 0) {
+              m_rtt[flowID] = rtt_tmp;
+            }
+            else
+            {
+              // if (rtt_tmp < m_rtt[flowID])
+              // {
+              //   m_rtt[flowID] = rtt_tmp;
+              // }
+              m_rtt[flowID] = 0.875 * m_rtt[flowID] + 0.125 * rtt_tmp;
+            }
+            UpdateBeta();
+          }
+          m_canCalcRtt[flowID] = true;
+        }
+      }
+      
+      Ipv4Header ipv4Hdr = DynamicCast<Ipv4QueueDiscItem>(item)->GetHeader();
+      
+      bool isMark = false;
+      // uint32_t qLen = qDisc->GetCurrentSize().GetValue();      
+      Ptr<ns3::WifiMacQueue> queue = DynamicCast<RegularWifiMac>(DynamicCast<WifiNetDevice>(device)->GetMac())->GetTxopQueue(AC_BE);
+      uint32_t qLen = qDisc->GetCurrentSize().GetValue() + queue->GetCurrentSize().GetValue();
+
+      if (m_isProbMark) 
+      {
+        m_uv = CreateObject<UniformRandomVariable> ();
+        double u = m_uv->GetValue ();
+        double vProb = 0.0;
+        if (qLen >= m_Kmin) {
+          if (qLen > m_Kmax) {
+            vProb = 1.0;
+          }
+          else {
+            vProb = m_Pmax / (m_Kmax - m_Kmin) * (qLen - m_Kmin);
+          }
+        }
+        if (u < vProb) {
+            isMark = true;
+          }
+      }
+      else
+      {
+        if (qLen >= m_Kmin) {
+          isMark = true;
+        }
+      }  
+
+      if ((ipv4Hdr.GetTos() & 0x03) == 0x03 || isMark)
+      // if ((ipv4Hdr.GetTos() & 0x03) == 0x03)
+      {
+        m_markedPackets[flowID]+=1;
+        m_isCongestion[flowID] = true;
+        if ((ipv4Hdr.GetTos() & 0x03) == 0x03)
+        {
+          ipv4Hdr.SetTos(ipv4Hdr.GetTos() & 0xfc);
+          DynamicCast<Ipv4QueueDiscItem>(item)->SetHeader(ipv4Hdr);
+        }          
+      }
+
+      if (tcpHdr.GetSequenceNumber() >= m_updateSeq[flowID])
+      {
+        UpdateAlpha(tcpHdr, flowID);
+      }
+    }
+  }
+}
+
+void 
+TrafficControlLayer::UpdateBeta(void)
+{
+  double rate_sum = 0.0;
+  uint32_t valid_flow_num = 0;
+  for(uint32_t i = 0; i < m_flowNumber; i++) {
+    if (m_rtt[i] > 0) {
+      m_rate[i] = m_windowSize[i] / m_rtt[i];
+      rate_sum += m_rate[i];
+      valid_flow_num += 1;
+    }
+  }
+
+  for(uint32_t i = 0; i < m_flowNumber; i++) {
+    if (m_rtt[i] > 0) {
+      if (valid_flow_num == 1) {
+        m_beta[i] = 1.0;
+      }
+      else {
+        m_beta[i] = (1 - m_rate[i] / rate_sum) * (valid_flow_num / (valid_flow_num - 1));
+      }       
+    }
+  }
+
+}
+
+void
+TrafficControlLayer::UpdateAlpha (TcpHeader& tcpHeader, uint16_t flowID)
+{
+  m_updateSeq[flowID] = tcpHeader.GetSequenceNumber () + m_windowSize[flowID] * m_MSS;
+  double F = (double)m_markedPackets[flowID] / m_totalPackets[flowID];
+  m_alpha[flowID] = (1 - m_g) * m_alpha[flowID] +m_g * F; 
+  m_markedPackets[flowID] = 0;
+  m_totalPackets[flowID] = 0;
+}
+
+uint16_t
+TrafficControlLayer::CalcRwnd (TcpHeader& tcpHeader, uint16_t flowID)
+{
+  if (m_isCongestion[flowID])
+  {
+    m_epochStart[flowID] = Simulator::Now ();
+    if (tcpHeader.GetAckNumber () > m_reduceSeq[flowID]) 
+    {
+      m_Wmax[flowID] = m_windowSize[flowID];
+      m_reduceSeq[flowID] = tcpHeader.GetAckNumber () + (m_windowSize[flowID] - 1) * m_MSS;
+      // m_windowSize[flowID] = m_windowSize[flowID] * (1 - m_alpha[flowID] / 2); 
+      m_windowSize[flowID] = m_windowSize[flowID] * (1 - std::pow(m_alpha[flowID], m_beta[flowID]) / 2); 
+      m_Wmin[flowID] = m_windowSize[flowID];
+      m_isSlowStart[flowID] = false;
+      m_isCongestion[flowID] = false;
+    }
+  }
+  else if (m_isSlowStart[flowID])
+  {
+    m_windowSize[flowID]+=1;
+  }
+  else
+  {
+    double K = std::pow ((m_Wmax[flowID] - m_Wmin[flowID]) / m_c, 1 / 3.);
+    Time t = Simulator::Now () - m_epochStart[flowID];
+    double tagetWindowSize = m_c * std::pow ((t.GetSeconds () - K), 3) + m_Wmax[flowID];
+    m_windowSize[flowID] = (tagetWindowSize - m_windowSize[flowID]) * m_beta[flowID] + m_windowSize[flowID];
+  }
+
+  m_windowSize[flowID] = std::max (m_windowSize[flowID], 2U);
+  uint16_t rwndsize;
+  if (m_windowSize[flowID] * m_MSS % 2048 == 0)
+  {
+    rwndsize = m_windowSize[flowID] * m_MSS / 2048;
+  } 
+  else
+  {
+    rwndsize = m_windowSize[flowID] * m_MSS / 2048 + 1;
+  }
+  return rwndsize; 
+}
+
+
+// APCC
+Ptr<FlowState> 
+TrafficControlLayer::GetFlow(uint32_t sip, uint16_t sport, bool create){
+	uint64_t key = ((uint64_t)sip << 32) | (uint64_t)sport;
+	auto it = m_flowTable.find(key);
+	if (it != m_flowTable.end())
+		return it->second;
+	if (create){
+		// create new flow state
+		Ptr<FlowState> f = CreateObject<FlowState>();
+		// init the flow
+		f->m_windowSize = 10;
+		f->m_isSlowStart = true;
+    f->m_reduceSeq = SequenceNumber32(0);
+		// store in map
+		m_flowTable[key] = f;
+		return f;
+	}
+	return NULL;
+}
+
+void
+TrafficControlLayer::UseAPCC (Ptr<QueueDiscItem> item, Ptr<QueueDisc> qDisc, Ptr<NetDevice> device)
+{
+  if (item->GetProtocol() != 2048) return ;  // 2048: IP protocol
+  
+  TcpHeader tcpHdr;
+  item->GetPacket ()->PeekHeader (tcpHdr); 
+  Ipv4Header ipv4Hdr = DynamicCast<Ipv4QueueDiscItem>(item)->GetHeader();
+
+  // Three-way Handshake, SYN->(SYN,ACK)->ACK, then all data packets have ACK flag
+  if (tcpHdr.GetFlags () & TcpHeader::SYN) return ;
+
+  // empty packet, namely the real ACK
+  if (item->GetPacket()->GetSize() == 4*tcpHdr.GetLength()) {
+    Ptr<FlowState> flow = GetFlow(ipv4Hdr.GetSource().Get(), tcpHdr.GetSourcePort(), true);
+    item->GetPacket ()->RemoveHeader (tcpHdr);
+    uint16_t rwndsize = CalcRwndAPCC(flow, tcpHdr);
+    tcpHdr.SetWindowSize(rwndsize);
+    item->GetPacket ()->AddHeader (tcpHdr);
+  }
+
+  // data packets
+  else {
+    Ptr<FlowState> flow = GetFlow(ipv4Hdr.GetDestination().Get(), tcpHdr.GetDestinationPort(), true);
+    Ptr<ns3::WifiMacQueue> queue = DynamicCast<RegularWifiMac>(DynamicCast<WifiNetDevice>(device)->GetMac())->GetTxopQueue(AC_BE);
+    uint32_t qLen = qDisc->GetCurrentSize().GetValue() + queue->GetCurrentSize().GetValue();
+    calcTotalDqRate(queue);
+    if (!flow->m_isSlowStart) {
+      calcTargetRate(qLen);
+    }
+    else {
+      if (qLen > m_Kmin && m_totalDqRate > 600) {
+        flow->m_isSlowStart = false;
+      }
+    }   
+  }
+}
+
+void
+TrafficControlLayer::calcTargetRate(uint32_t qLen) {
+  if (qLen < m_Kmin) {
+    m_targetRate = m_eta * 650;
+  }
+  else {
+    m_targetRate = m_eta * 650 - (qLen - m_Kmin) * 1.5 * 8 / m_tau;
+    m_targetRate = std::max(10.0, m_targetRate);
+  }
+}
+
+void
+TrafficControlLayer::calcTotalDqRate(Ptr<ns3::WifiMacQueue> queue) {
+  double sendTime = Simulator::Now().GetSeconds();
+  uint64_t sendBytes = queue->m_sendBytes;
+  if (sendBytes == m_lastSendBytes || sendTime - m_lastSendTime < 0.01) return ;
+  m_totalDqRate = (sendBytes - m_lastSendBytes) * 8 / (sendTime - m_lastSendTime) / 1000000;
+  m_lastSendBytes = sendBytes;
+  m_lastSendTime = sendTime;
+}
+
+uint16_t 
+TrafficControlLayer::CalcRwndAPCC (Ptr<FlowState> f, TcpHeader& tcpHeader){
+  if (f->m_isSlowStart) {
+    f->m_windowSize+=1;
+  }
+  else {
+    if (tcpHeader.GetAckNumber () > f->m_reduceSeq) {
+        f->m_reduceSeq = tcpHeader.GetAckNumber () + (f->m_windowSize - 1) * m_MSS;
+        f->m_windowSize = f->m_windowSize * (m_targetRate / m_totalDqRate);
+    }
+  }
+
+  f->m_windowSize = std::max (f->m_windowSize, 2U);
+  uint16_t rwndsize;
+  if (f->m_windowSize * m_MSS % 2048 == 0) {
+    rwndsize = f->m_windowSize * m_MSS / 2048;
+  } 
+  else {
+    rwndsize = f->m_windowSize * m_MSS / 2048 + 1;
+  }
+  return rwndsize; 
+}
+
+void
 TrafficControlLayer::Send (Ptr<NetDevice> device, Ptr<QueueDiscItem> item)
 {
   NS_LOG_FUNCTION (this << device << item);
@@ -393,6 +780,12 @@ TrafficControlLayer::Send (Ptr<NetDevice> device, Ptr<QueueDiscItem> item)
 
       Ptr<QueueDisc> qDisc = ndi->second.m_queueDiscsToWake[txq];
       NS_ASSERT (qDisc);
+      if (m_ccmode == 2) {
+        ModifyRwnd(item, qDisc, device);
+      }
+      else if (m_ccmode == 3) {
+        UseAPCC(item, qDisc, device);
+      }
       qDisc->Enqueue (item);
       qDisc->Run ();
     }

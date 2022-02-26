@@ -7,7 +7,7 @@
 #     conf.check_nonfatal(header_name='stdint.h', define_name='HAVE_STDINT_H')
 
 def build(bld):
-    module = bld.create_ns3_module('traffic-control', ['core', 'network'])
+    module = bld.create_ns3_module('traffic-control', ['core', 'network', 'wifi'])
     module.source = [
       'model/traffic-control-layer.cc',
       'model/packet-filter.cc',
