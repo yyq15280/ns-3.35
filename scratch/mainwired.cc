@@ -26,7 +26,7 @@ static void TraceRtt (string rtt_tr_file_name) {
 
 ofstream qlenOutput;
 void DevicePacketsInQueueTrace (Ptr<QueueDisc> root, uint32_t oldValue, uint32_t newValue) {
-    uint32_t qlen = newValue + root->GetQueueDiscClass (0)->GetQueueDisc ()->GetCurrentSize ().GetValue ();
+    uint32_t qlen = newValue + root->GetCurrentSize ().GetValue ();
     qlenOutput << Simulator::Now ().GetSeconds () << " " << qlen << std::endl;       
 }
 
@@ -49,7 +49,7 @@ static void TraceThput (string thput_tr_file_name, Ptr<PointToPointNetDevice> de
 
 
 int main (int argc, char *argv[]) {   
-    uint32_t cc_mode = 3;
+    uint32_t cc_mode = 2;
 
     // Config::SetDefault ("ns3::WifiMacQueue::MaxSize", QueueSizeValue (QueueSize ("100p")));  // default 500p 
     // Config::SetDefault ("ns3::WifiMacQueue::MaxDelay", TimeValue (MilliSeconds (1000)));
@@ -83,6 +83,8 @@ int main (int argc, char *argv[]) {
     string rate_2 = "40000Mbps";  // the rate of core switch to convergence switch 
     string rate_3 = "10000Mbps";  // the rate of convergence switch to access switch 
     string rate_4 = "1000Mbps";  // the rate of access switch to ap
+    uint32_t device_rate = 650;
+    string rate_5 = to_string(device_rate)+"Mbps";  // the rate of ap to wifi node
     string channel_delay = "0.15ms";
 
     // create nodes
@@ -99,7 +101,7 @@ int main (int argc, char *argv[]) {
     ap.Create(ap_num);
     vector<NodeContainer> wifi_nodes(ap_num);
     for(uint32_t i = 0; i < ap_num; i++) {
-        wifi_nodes[i].Create(2);     
+        wifi_nodes[i].Create(1);     
     }
 
     // install stack
@@ -136,60 +138,12 @@ int main (int argc, char *argv[]) {
     for(uint32_t i = 0; i < ap_num; i++) {
         access_devices[i] = p2p_4.Install(access_switches.Get(0), ap.Get(i));
     }
+    PointToPointHelper p2p_5;
+    p2p_5.SetDeviceAttribute("DataRate", StringValue(rate_5));
+    p2p_5.SetChannelAttribute("Delay", StringValue(channel_delay));
+    NetDeviceContainer p2p_5_devices;
+    p2p_5_devices = p2p_5.Install(ap.Get(0), wifi_nodes[0].Get(0));
 
-    // create wifi connect
-    vector<YansWifiChannelHelper> wifi_channel(ap_num);
-    vector<YansWifiPhyHelper> wifi_phy(ap_num);
-    for(uint32_t i = 0; i < ap_num; i++) {
-        wifi_channel[i] = YansWifiChannelHelper::Default();
-        wifi_phy[i].SetChannel (wifi_channel[i].Create ());
-
-        //transmission power: 27dBm
-        wifi_phy[i].Set("TxPowerStart", DoubleValue(27));
-        wifi_phy[i].Set("TxPowerEnd", DoubleValue(27));
-        wifi_phy[i].Set("TxPowerLevels", UintegerValue(1));
-    }    
-
-    WifiHelper wifi;
-    wifi.SetStandard (WIFI_STANDARD_80211ax_5GHZ);
-    wifi.SetRemoteStationManager ("ns3::ConstantRateWifiManager",
-                                "DataMode", StringValue ("HeMcs11"),
-                                "ControlMode", StringValue ("HeMcs11"));
-    // wifi.SetRemoteStationManager("ns3::MinstrelHtWifiManager");
-    WifiMacHelper wifi_mac;
-    vector<NetDeviceContainer> wifi_nodes_devices(ap_num);
-    vector<NetDeviceContainer> ap_devices(ap_num);
-    for(uint32_t i = 0; i < ap_num; i++) {
-        string ssid_name = "ap" + std::to_string(i);
-        Ssid ssid = Ssid(ssid_name);
-        wifi_mac.SetType("ns3::StaWifiMac",
-                    "Ssid", SsidValue(ssid));
-        wifi_nodes_devices[i] = wifi.Install(wifi_phy[i], wifi_mac, wifi_nodes[i]);
-        wifi_mac.SetType ("ns3::ApWifiMac",
-                    "Ssid", SsidValue(ssid));
-        ap_devices[i] = wifi.Install(wifi_phy[i], wifi_mac, ap.Get(i));
-    }
-    // Config::Set ("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/$ns3::WifiMac/QosSupported", BooleanValue (false));
-    // std::cout<<DynamicCast<ApWifiMac>(DynamicCast<WifiNetDevice>(ap_devices[0].Get(0))->GetMac())->GetQosSupported()<<std::endl;
-    Config::Set ("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/$ns3::WifiPhy/ChannelNumber", UintegerValue (50)); // set channel width 160MHz    
-    // std::cout<<DynamicCast<WifiNetDevice>(ap_devices[0].Get(0))->GetPhy()->GetChannelWidth()<<std::endl;   
-    Config::Set ("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/HeConfiguration/GuardInterval", TimeValue (NanoSeconds (800)));
-
-
-    // mobility.
-    vector<MobilityHelper> mobility(ap_num);
-    vector<Ptr<ListPositionAllocator>> positionAlloc(ap_num);
-    for(uint32_t i = 0; i < ap_num; i++) {
-        positionAlloc[i] = CreateObject<ListPositionAllocator> ();
-        positionAlloc[i]->Add (Vector (0.0, i*50.0, 0.0)); 
-        positionAlloc[i]->Add (Vector (3.0, i*50.0, 0.0)); 
-        positionAlloc[i]->Add (Vector (-3.0, i*50.0, 0.0));
-        mobility[i].SetPositionAllocator (positionAlloc[i]);
-        mobility[i].SetMobilityModel ("ns3::ConstantPositionMobilityModel");
-        mobility[i].Install (ap.Get(i));
-        mobility[i].Install (wifi_nodes[i]);
-    }
-    
     // install queue disc
     // To install a queue disc other than the default one, it is necessary to install such queue disc before an IP address is assigned to the device
     
@@ -200,40 +154,38 @@ int main (int argc, char *argv[]) {
     //     qdiscs[i] = tchWifi.Install(ap_devices[i]);
     // }
     TrafficControlHelper tch;
-    uint16_t handle = tch.SetRootQueueDisc ("ns3::MqQueueDisc");
-    TrafficControlHelper::ClassIdList cls = tch.AddQueueDiscClasses (handle, 4, "ns3::QueueDiscClass");
     if (cc_mode == 0) {
-        tch.AddChildQueueDiscs (handle, cls, "ns3::FifoQueueDisc");
+        tch.SetRootQueueDisc ("ns3::FifoQueueDisc", "MaxSize", StringValue ("7900p"));
     }
     else if (cc_mode == 1) {
-        tch.AddChildQueueDiscs (handle, cls, "ns3::RedQueueDisc");
+        tch.SetRootQueueDisc ("ns3::RedQueueDisc", "MaxSize", StringValue ("7900p"));
     }   
     else if (cc_mode == 2) {
-        tch.AddChildQueueDiscs (handle, cls, "ns3::FifoQueueDisc");
+        tch.SetRootQueueDisc ("ns3::FifoQueueDisc", "MaxSize", StringValue ("7900p"));
     } 
     else if (cc_mode == 3) {
-        tch.AddChildQueueDiscs (handle, cls, "ns3::FifoQueueDisc");
+        tch.SetRootQueueDisc ("ns3::FifoQueueDisc", "MaxSize", StringValue ("7900p"));
     } 
-    tch.Install (ap_devices[0]);
-    Ptr<QueueDisc> root_qdisc = ap.Get(0)->GetObject<TrafficControlLayer> ()->GetRootQueueDiscOnDevice(ap_devices[0].Get(0));
-    root_qdisc->GetQueueDiscClass (0)->GetQueueDisc () -> SetMaxSize (QueueSize("7500p"));
+    tch.Install (p2p_5_devices.Get(0));
+    Ptr<QueueDisc> root_qdisc = ap.Get(0)->GetObject<TrafficControlLayer> ()->GetRootQueueDiscOnDevice(p2p_5_devices.Get(0));
     if (cc_mode == 0) {
         
     }
     else if (cc_mode == 1) {
-        root_qdisc->GetQueueDiscClass (0)->GetQueueDisc () -> SetAttribute ("MinTh", DoubleValue (150));
-        root_qdisc->GetQueueDiscClass (0)->GetQueueDisc () -> SetAttribute ("MaxTh", DoubleValue (150));        
+        root_qdisc-> SetAttribute ("MinTh", DoubleValue (150));
+        root_qdisc-> SetAttribute ("MaxTh", DoubleValue (150));        
     }
     else if (cc_mode == 2) {
         Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer> ();
         tc->SetAttribute("Ccmode", UintegerValue (2));
-        tc->SetAttribute("Kmin", UintegerValue (500));
+        tc->SetAttribute("Kmin", UintegerValue (300));
     }
     else if (cc_mode == 3) {
         Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer> ();
         tc->SetAttribute("Ccmode", UintegerValue (3));
-        tc->SetAttribute("Kmin", UintegerValue (300));
-        tc->SetAttribute("DeviceRate", UintegerValue (650));
+        tc->SetAttribute("Kmin", UintegerValue (500));
+        tc->SetAttribute("DeviceRate", UintegerValue (device_rate));
+        tc->SetAttribute("IsWired", BooleanValue (true));
     }
 
 
@@ -258,8 +210,8 @@ int main (int argc, char *argv[]) {
         std::ostringstream subnet;
 	    subnet<<"192.168.2"<< i + 30 <<".0";
         address.SetBase(subnet.str().c_str(), "255.255.255.0");
-        ap_interfaces[i] = address.Assign(ap_devices[i]);
-        wifi_nodes_interfaces[i] = address.Assign(wifi_nodes_devices[i]);
+        ap_interfaces[i] = address.Assign(p2p_5_devices.Get(0));
+        wifi_nodes_interfaces[i] = address.Assign(p2p_5_devices.Get(1));
     }
     Ipv4GlobalRoutingHelper::PopulateRoutingTables ();
     // End create topo
@@ -291,13 +243,13 @@ int main (int argc, char *argv[]) {
     double intvl = 0.05;
     Simulator::Schedule(Seconds(intvl), &TraceThput, "result/thput.data", device1, 0, intvl);
     // void RateByWifiNetDevice(Ptr<WifiNetDevice> device, int no, double interval);
-    Ptr<WifiNetDevice> device2 = DynamicCast<WifiNetDevice>(ap_devices[0].Get(0));
+    Ptr<PointToPointNetDevice> device2 = DynamicCast<PointToPointNetDevice>(p2p_5_devices.Get(0));
     // Simulator::Schedule(Seconds(intvl), &RateByWifiNetDevice, device2, 1, intvl);
 
     Simulator::Schedule (Seconds (appStartTime + 0.00001), &TraceRtt, "result/rtt.data");
     qlenOutput.open ("result/qlen.data"); 
-    Ptr<ns3::WifiMacQueue> queue = DynamicCast<RegularWifiMac>(device2->GetMac())->GetTxopQueue(AC_BE);
-    queue->TraceConnectWithoutContext ("PacketsInQueue", MakeBoundCallback (&DevicePacketsInQueueTrace, root_qdisc));
+    device2->GetQueue()->TraceConnectWithoutContext ("PacketsInQueue", MakeBoundCallback (&DevicePacketsInQueueTrace, root_qdisc));
+
     
     // void printCurrentSize(Ptr<QueueDisc> root);    
     // Simulator::Schedule(Seconds(0.1), &printCurrentSize, root);

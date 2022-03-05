@@ -31,6 +31,7 @@
 #include "ns3/ipv4-packet-filter.h"
 #include "ns3/ipv4-queue-disc-item.h"
 #include "ns3/wifi-module.h"
+#include "ns3/point-to-point-net-device.h"
 
 namespace ns3 {
 
@@ -110,13 +111,22 @@ TrafficControlLayer::GetTypeId (void)
                    MakeUintegerAccessor (&TrafficControlLayer::m_MSS),
                    MakeUintegerChecker <uint32_t> ())
     .AddAttribute ("Eta", "maximum segment size",
-                   DoubleValue (0.99),
+                   DoubleValue (0.995),
                    MakeDoubleAccessor (&TrafficControlLayer::m_eta),
                    MakeDoubleChecker <double> (0.0))
     .AddAttribute ("Tau", "reduce the queue from qLen to Kmin after Tau time, ms",
                    UintegerValue (100),
                    MakeUintegerAccessor (&TrafficControlLayer::m_tau),
                    MakeUintegerChecker <uint32_t> ())
+    .AddAttribute ("DeviceRate", "the device rate, Mbps",
+                   UintegerValue (650),
+                   MakeUintegerAccessor (&TrafficControlLayer::m_deviceRate),
+                   MakeUintegerChecker <uint32_t> ())
+    .AddAttribute ("IsWired",
+                   "True, wired network; false, wireless network",
+                   BooleanValue (false),
+                   MakeBooleanAccessor (&TrafficControlLayer::m_isWired),
+                   MakeBooleanChecker ())
   ;
   return tid;
 }
@@ -185,7 +195,7 @@ TrafficControlLayer::DoInitialize (void)
     m_rate.push_back(-1.0);
   }
 
-  m_targetRate = 650;
+  m_targetRate = m_deviceRate;
   m_totalDqRate = 0.0;
   m_lastSendBytes = 0;
   m_lastSendTime = 2.0;
@@ -494,11 +504,17 @@ TrafficControlLayer::ModifyRwnd (Ptr<QueueDiscItem> item, Ptr<QueueDisc> qDisc, 
       
       Ipv4Header ipv4Hdr = DynamicCast<Ipv4QueueDiscItem>(item)->GetHeader();
       
-      bool isMark = false;
-      // uint32_t qLen = qDisc->GetCurrentSize().GetValue();      
-      Ptr<ns3::WifiMacQueue> queue = DynamicCast<RegularWifiMac>(DynamicCast<WifiNetDevice>(device)->GetMac())->GetTxopQueue(AC_BE);
-      uint32_t qLen = qDisc->GetCurrentSize().GetValue() + queue->GetCurrentSize().GetValue();
+      uint32_t qLen;
+      if (m_isWired) {
+        Ptr<Queue<Packet>> queue = DynamicCast<PointToPointNetDevice>(device)->GetQueue();
+        qLen = qDisc->GetCurrentSize().GetValue() + queue->GetCurrentSize().GetValue();
+      }
+      else {
+        Ptr<ns3::WifiMacQueue> queue = DynamicCast<RegularWifiMac>(DynamicCast<WifiNetDevice>(device)->GetMac())->GetTxopQueue(AC_BE);
+        qLen = qDisc->GetCurrentSize().GetValue() + queue->GetCurrentSize().GetValue();
+      }
 
+      bool isMark = false;
       if (m_isProbMark) 
       {
         m_uv = CreateObject<UniformRandomVariable> ();
@@ -667,9 +683,18 @@ TrafficControlLayer::UseAPCC (Ptr<QueueDiscItem> item, Ptr<QueueDisc> qDisc, Ptr
   // data packets
   else {
     Ptr<FlowState> flow = GetFlow(ipv4Hdr.GetDestination().Get(), tcpHdr.GetDestinationPort(), true);
-    Ptr<ns3::WifiMacQueue> queue = DynamicCast<RegularWifiMac>(DynamicCast<WifiNetDevice>(device)->GetMac())->GetTxopQueue(AC_BE);
-    uint32_t qLen = qDisc->GetCurrentSize().GetValue() + queue->GetCurrentSize().GetValue();
-    calcTotalDqRate(queue);
+    uint32_t qLen;
+    if (m_isWired) {
+      Ptr<Queue<Packet>> queue = DynamicCast<PointToPointNetDevice>(device)->GetQueue();
+      qLen = qDisc->GetCurrentSize().GetValue() + queue->GetCurrentSize().GetValue();
+      calcTotalDqRate(DynamicCast<PointToPointNetDevice>(device));
+    }
+    else {
+      Ptr<ns3::WifiMacQueue> queue = DynamicCast<RegularWifiMac>(DynamicCast<WifiNetDevice>(device)->GetMac())->GetTxopQueue(AC_BE);
+      qLen = qDisc->GetCurrentSize().GetValue() + queue->GetCurrentSize().GetValue();
+      calcTotalDqRate(queue);
+    }
+    
     if (!flow->m_isSlowStart) {
       calcTargetRate(qLen);
     }
@@ -684,12 +709,22 @@ TrafficControlLayer::UseAPCC (Ptr<QueueDiscItem> item, Ptr<QueueDisc> qDisc, Ptr
 void
 TrafficControlLayer::calcTargetRate(uint32_t qLen) {
   if (qLen < m_Kmin) {
-    m_targetRate = m_eta * 650;
+    m_targetRate = m_eta * m_deviceRate;
   }
   else {
-    m_targetRate = m_eta * 650 - (qLen - m_Kmin) * 1.5 * 8 / m_tau;
+    m_targetRate = m_eta * m_deviceRate - (qLen - m_Kmin) * 1.5 * 8 / m_tau;
     m_targetRate = std::max(10.0, m_targetRate);
   }
+}
+
+void
+TrafficControlLayer::calcTotalDqRate(Ptr<PointToPointNetDevice> device) {
+  double sendTime = Simulator::Now().GetSeconds();
+  uint64_t sendBytes = device->m_sendBytes;
+  if (sendBytes == m_lastSendBytes || sendTime - m_lastSendTime < 0.01) return ;
+  m_totalDqRate = (sendBytes - m_lastSendBytes) * 8 / (sendTime - m_lastSendTime) / 1000000;
+  m_lastSendBytes = sendBytes;
+  m_lastSendTime = sendTime;
 }
 
 void

@@ -30,6 +30,7 @@
 #include "ns3/random-variable-stream.h"
 #include <unordered_map>
 #include "ns3/wifi-module.h"
+#include "ns3/point-to-point-net-device.h"
 
 namespace ns3 {
 
@@ -311,6 +312,7 @@ private:
   void UseAPCC(Ptr<QueueDiscItem> item, Ptr<QueueDisc> qDisc, Ptr<NetDevice> device); 
   uint16_t CalcRwndAPCC (Ptr<FlowState> flow, TcpHeader& tcpHeader);
   void calcTargetRate(uint32_t qLen);
+  void calcTotalDqRate(Ptr<PointToPointNetDevice> device);
   void calcTotalDqRate(Ptr<ns3::WifiMacQueue> queue);
 
   double m_eta;
@@ -319,6 +321,10 @@ private:
   double m_totalDqRate;
   uint64_t m_lastSendBytes;
   double m_lastSendTime;
+
+
+  uint32_t m_deviceRate;
+  bool m_isWired;
 };
 
 } // namespace ns3
