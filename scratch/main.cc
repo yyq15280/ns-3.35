@@ -33,6 +33,7 @@ void DevicePacketsInQueueTrace (Ptr<QueueDisc> root, uint32_t oldValue, uint32_t
 uint64_t lastSendBytes[5] = {0, 0, 0, 0, 0};
 uint64_t tmp[5];
 static Ptr<OutputStreamWrapper> thputStream;
+
 void RateByPtpNetDevice(Ptr<PointToPointNetDevice> device, int no, double interval){
 	Time time = Seconds(interval);
 	tmp[no] = device->m_sendBytes - lastSendBytes[no];
@@ -41,7 +42,8 @@ void RateByPtpNetDevice(Ptr<PointToPointNetDevice> device, int no, double interv
 	*thputStream->GetStream () << Simulator::Now ().GetSeconds () << '\t' << rate << "Mbps" << endl;
 	Simulator::Schedule(time, &RateByPtpNetDevice, device, no, interval);
 }
-static void TraceThput (string thput_tr_file_name, Ptr<PointToPointNetDevice> device, int no, double interval) {
+
+static void TraceThput (string thput_tr_file_name, Ptr<PointToPointNetDevice> device, int no, double interval) {//结果写到哪个文件中 ，跟踪哪个网卡
     AsciiTraceHelper ascii;
     thputStream = ascii.CreateFileStream (thput_tr_file_name.c_str ());
     RateByPtpNetDevice(device, no, interval);
@@ -55,7 +57,7 @@ int main (int argc, char *argv[]) {
     // Config::SetDefault ("ns3::WifiMacQueue::MaxDelay", TimeValue (MilliSeconds (1000)));
 
     if (cc_mode == 0) {
-        Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpNewReno"));        
+        Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpNewReno")); //更改拥塞控制算法，在ns335中默认的是cubic
     }
     else if (cc_mode == 1) {
         Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpCubic")); 
@@ -72,11 +74,11 @@ int main (int argc, char *argv[]) {
     else if (cc_mode == 3) {
         Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpNewReno")); 
     }
-    Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (10));
-    Config::SetDefault ("ns3::TcpSocket::SndBufSize", UintegerValue (67108864));
+    Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (10));//更改tcp初始拥塞窗口大小
+    Config::SetDefault ("ns3::TcpSocket::SndBufSize", UintegerValue (67108864));//传输层用socket来控制，socket里有buffer 先发到buffer里面，默认比较小，所以设置高一些
     Config::SetDefault ("ns3::TcpSocket::RcvBufSize", UintegerValue (67108864));
-    Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (1448));
-    Config::SetDefault ("ns3::TcpSocketBase::MinRto", TimeValue (MilliSeconds (200)));
+    Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (1448));//将应用数据分段，每1448字节就添加包头 不能超过1500， 链路层有mtu，data字节数加上tcp，ip包头
+    Config::SetDefault ("ns3::TcpSocketBase::MinRto", TimeValue (MilliSeconds (200)));//设置为200ms和linux对齐，在main函数头部部分加设置才有效
 
     // Start create topo
     string rate_1 = "100000Mbps";  // the rate of "remote server" to core switch 
@@ -87,7 +89,7 @@ int main (int argc, char *argv[]) {
 
     // create nodes
     NodeContainer remote_servers;
-    remote_servers.Create(1);
+    remote_servers.Create(1);//远端服务器
     NodeContainer core_switches;
     core_switches.Create(1);
     NodeContainer convergence_switches;
@@ -98,7 +100,7 @@ int main (int argc, char *argv[]) {
     uint32_t ap_num = 1;
     ap.Create(ap_num);
     vector<NodeContainer> wifi_nodes(ap_num);
-    for(uint32_t i = 0; i < ap_num; i++) {
+    for(uint32_t i = 0; i < ap_num; i++) {//每个ap下创建两个wifi节点
         wifi_nodes[i].Create(2);     
     }
 
@@ -115,7 +117,7 @@ int main (int argc, char *argv[]) {
 
     // create wired connect        
     PointToPointHelper p2p_1;
-    p2p_1.SetDeviceAttribute("DataRate", StringValue(rate_1));
+    p2p_1.SetDeviceAttribute("DataRate", StringValue(rate_1));//设置网卡速率
     p2p_1.SetChannelAttribute("Delay", StringValue("9ms"));
     NetDeviceContainer p2p_1_devices;
     p2p_1_devices = p2p_1.Install(remote_servers.Get(0), core_switches.Get(0));
@@ -139,7 +141,7 @@ int main (int argc, char *argv[]) {
 
     // create wifi connect
     vector<YansWifiChannelHelper> wifi_channel(ap_num);
-    vector<YansWifiPhyHelper> wifi_phy(ap_num);
+    vector<YansWifiPhyHelper> wifi_phy(ap_num);//创建无线的phy层
     for(uint32_t i = 0; i < ap_num; i++) {
         wifi_channel[i] = YansWifiChannelHelper::Default();
         wifi_phy[i].SetChannel (wifi_channel[i].Create ());
@@ -149,7 +151,7 @@ int main (int argc, char *argv[]) {
         wifi_phy[i].Set("TxPowerEnd", DoubleValue(27));
         wifi_phy[i].Set("TxPowerLevels", UintegerValue(1));
     }    
-
+//配置mac协议
     WifiHelper wifi;
     wifi.SetStandard (WIFI_STANDARD_80211ax_5GHZ);
     wifi.SetRemoteStationManager ("ns3::ConstantRateWifiManager",
@@ -173,7 +175,7 @@ int main (int argc, char *argv[]) {
     // std::cout<<DynamicCast<ApWifiMac>(DynamicCast<WifiNetDevice>(ap_devices[0].Get(0))->GetMac())->GetQosSupported()<<std::endl;
     Config::Set ("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/$ns3::WifiPhy/ChannelNumber", UintegerValue (50)); // set channel width 160MHz    
     // std::cout<<DynamicCast<WifiNetDevice>(ap_devices[0].Get(0))->GetPhy()->GetChannelWidth()<<std::endl;   
-    Config::Set ("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/HeConfiguration/GuardInterval", TimeValue (NanoSeconds (800)));
+    Config::Set ("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/HeConfiguration/GuardInterval", TimeValue (NanoSeconds (800)));//设置间隔 间隔越小 吞吐越高
 
 
     // mobility.
@@ -199,9 +201,9 @@ int main (int argc, char *argv[]) {
     // for(uint32_t i = 0; i < ap_num; i++) {
     //     qdiscs[i] = tchWifi.Install(ap_devices[i]);
     // }
-    TrafficControlHelper tch;
+    TrafficControlHelper tch;//控制软件队列，硬件队列是fifo
     uint16_t handle = tch.SetRootQueueDisc ("ns3::MqQueueDisc");
-    TrafficControlHelper::ClassIdList cls = tch.AddQueueDiscClasses (handle, 4, "ns3::QueueDiscClass");
+    TrafficControlHelper::ClassIdList cls = tch.AddQueueDiscClasses (handle, 4, "ns3::QueueDiscClass");//为根队列规则添加子队列规则
     if (cc_mode == 0) {
         tch.AddChildQueueDiscs (handle, cls, "ns3::FifoQueueDisc");
     }
@@ -216,7 +218,7 @@ int main (int argc, char *argv[]) {
     } 
     tch.Install (ap_devices[0]);
     Ptr<QueueDisc> root_qdisc = ap.Get(0)->GetObject<TrafficControlLayer> ()->GetRootQueueDiscOnDevice(ap_devices[0].Get(0));
-    root_qdisc->GetQueueDiscClass (0)->GetQueueDisc () -> SetMaxSize (QueueSize("7500p"));
+    root_qdisc->GetQueueDiscClass (0)->GetQueueDisc () -> SetMaxSize (QueueSize("7500p"));//设置队列的最大长度
     if (cc_mode == 0) {
         
     }
@@ -237,7 +239,7 @@ int main (int argc, char *argv[]) {
     }
 
 
-    // assign IP address
+    // assign IP address 分配ip
     Ipv4AddressHelper address;
     address.SetBase ("192.168.200.0", "255.255.255.0");
     Ipv4InterfaceContainer p2p_1_interfaces = address.Assign(p2p_1_devices);
@@ -264,20 +266,20 @@ int main (int argc, char *argv[]) {
     Ipv4GlobalRoutingHelper::PopulateRoutingTables ();
     // End create topo
 
-    // Start create flow
+    // Start create flow 创建app
     double simulationTime = 5;  // seconds
     double appStartTime = 2.0;
     vector<ApplicationContainer> sinkAppA(ap_num);
     vector<ApplicationContainer> sourceAppA(ap_num);
     for(uint32_t i = 0; i < ap_num; i++) {
         uint16_t port = 50000;
-        PacketSinkHelper sinkHelperA ("ns3::TcpSocketFactory", InetSocketAddress (Ipv4Address::GetAny (), port));
+        PacketSinkHelper sinkHelperA ("ns3::TcpSocketFactory", InetSocketAddress (Ipv4Address::GetAny (), port));//创建接受的app
         sinkAppA[i] = sinkHelperA.Install (wifi_nodes[i].Get(0));
         sinkAppA[i].Start (Seconds(appStartTime - 1));
         sinkAppA[i].Stop (Seconds(simulationTime + appStartTime));
         InetSocketAddress remoteAddressA = InetSocketAddress (wifi_nodes_interfaces[i].GetAddress(0), port);
         // remoteAddressA.SetTos(0x14);
-        BulkSendHelper sourceHelperA ("ns3::TcpSocketFactory", remoteAddressA);
+        BulkSendHelper sourceHelperA ("ns3::TcpSocketFactory", remoteAddressA);//创建发送app
         sourceHelperA.SetAttribute ("SendSize", UintegerValue (1000));
         sourceHelperA.SetAttribute ("MaxBytes", UintegerValue (0));
         sourceAppA[i].Add (sourceHelperA.Install (remote_servers.Get(0)));
@@ -287,15 +289,15 @@ int main (int argc, char *argv[]) {
     // End create flow
 
     // Start Trace
-    Ptr<PointToPointNetDevice> device1 = DynamicCast<PointToPointNetDevice>(p2p_1_devices.Get(0));
+    Ptr<PointToPointNetDevice> device1 = DynamicCast<PointToPointNetDevice>(p2p_1_devices.Get(0));//每间隔一段时间去记录
     double intvl = 0.05;
-    Simulator::Schedule(Seconds(intvl), &TraceThput, "result/thput.data", device1, 0, intvl);
+    Simulator::Schedule(Seconds(intvl), &TraceThput, "result/thput.data", device1, 0, intvl);//记录吞吐，在01s后调用tarce函数
     // void RateByWifiNetDevice(Ptr<WifiNetDevice> device, int no, double interval);
     Ptr<WifiNetDevice> device2 = DynamicCast<WifiNetDevice>(ap_devices[0].Get(0));
     // Simulator::Schedule(Seconds(intvl), &RateByWifiNetDevice, device2, 1, intvl);
 
-    Simulator::Schedule (Seconds (appStartTime + 0.00001), &TraceRtt, "result/rtt.data");
-    qlenOutput.open ("result/qlen.data"); 
+    Simulator::Schedule (Seconds (appStartTime + 0.00001), &TraceRtt, "result/rtt.data");//时延
+    qlenOutput.open ("result/qlen.data"); //队列长度
     Ptr<ns3::WifiMacQueue> queue = DynamicCast<RegularWifiMac>(device2->GetMac())->GetTxopQueue(AC_BE);
     queue->TraceConnectWithoutContext ("PacketsInQueue", MakeBoundCallback (&DevicePacketsInQueueTrace, root_qdisc));
     
