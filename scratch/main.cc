@@ -57,7 +57,7 @@ static void TraceThput(string thput_tr_file_name, Ptr<PointToPointNetDevice> dev
 
 int main(int argc, char *argv[])
 {
-    uint32_t cc_mode = 3;
+    uint32_t cc_mode = 0;
 
     // Config::SetDefault ("ns3::WifiMacQueue::MaxSize", QueueSizeValue (QueueSize ("100p")));  // default 500p
     // Config::SetDefault ("ns3::WifiMacQueue::MaxDelay", TimeValue (MilliSeconds (1000)));
@@ -87,7 +87,7 @@ int main(int argc, char *argv[])
     Config::SetDefault("ns3::TcpSocket::InitialCwnd", UintegerValue(10));      //更改tcp初始拥塞窗口大小
     Config::SetDefault("ns3::TcpSocket::SndBufSize", UintegerValue(67108864)); //传输层用socket来控制，socket里有buffer 先发到buffer里面，默认比较小，所以设置高一些
     Config::SetDefault("ns3::TcpSocket::RcvBufSize", UintegerValue(67108864));
-    Config::SetDefault("ns3::TcpSocket::SegmentSize", UintegerValue(1448));         //将应用数据分段，每1448字节就添加包头 不能超过1500， 链路层有mtu，data字节数加上tcp，ip包头
+    Config::SetDefault("ns3::TcpSocket::SegmentSize", UintegerValue(1448));         //将应用数据分段，每1448字节就添加包头,不能超过1500，ns3有tcp optition，占12字节，data字节数加上tcp，ip包头
     Config::SetDefault("ns3::TcpSocketBase::MinRto", TimeValue(MilliSeconds(200))); //设置为200ms和linux对齐，在main函数头部部分加设置才有效
 
     // Start create topo
@@ -106,6 +106,7 @@ int main(int argc, char *argv[])
     convergence_switches.Create(1);
     NodeContainer access_switches;
     access_switches.Create(1);
+
     NodeContainer ap;
     uint32_t ap_num = 1;
     ap.Create(ap_num);
@@ -159,8 +160,7 @@ int main(int argc, char *argv[])
     {
         wifi_channel[i] = YansWifiChannelHelper::Default();
         wifi_phy[i].SetChannel(wifi_channel[i].Create());
-
-        // transmission power: 27dBm
+        // transmission power: 27dBm//27db？
         wifi_phy[i].Set("TxPowerStart", DoubleValue(27));
         wifi_phy[i].Set("TxPowerEnd", DoubleValue(27));
         wifi_phy[i].Set("TxPowerLevels", UintegerValue(1));
@@ -176,7 +176,7 @@ int main(int argc, char *argv[])
     vector<NetDeviceContainer> wifi_nodes_devices(ap_num);
     vector<NetDeviceContainer> ap_devices(ap_num);
     for (uint32_t i = 0; i < ap_num; i++)
-    {
+    { //在这里添加qos
         string ssid_name = "ap" + std::to_string(i);
         Ssid ssid = Ssid(ssid_name);
         wifi_mac.SetType("ns3::StaWifiMac",
@@ -203,7 +203,7 @@ int main(int argc, char *argv[])
         positionAlloc[i]->Add(Vector(-3.0, i * 50.0, 0.0));
         mobility[i].SetPositionAllocator(positionAlloc[i]);
         mobility[i].SetMobilityModel("ns3::ConstantPositionMobilityModel");
-        mobility[i].Install(ap.Get(i));
+        mobility[i].Install(ap.Get(i)); //安装在不同的坐标上
         mobility[i].Install(wifi_nodes[i]);
     }
 
@@ -216,6 +216,7 @@ int main(int argc, char *argv[])
     // for(uint32_t i = 0; i < ap_num; i++) {
     //     qdiscs[i] = tchWifi.Install(ap_devices[i]);
     // }
+
     TrafficControlHelper tch; //控制软件队列，硬件队列是fifo
     uint16_t handle = tch.SetRootQueueDisc("ns3::MqQueueDisc");
     TrafficControlHelper::ClassIdList cls = tch.AddQueueDiscClasses(handle, 4, "ns3::QueueDiscClass"); //为根队列规则添加子队列规则
@@ -235,26 +236,32 @@ int main(int argc, char *argv[])
     {
         tch.AddChildQueueDiscs(handle, cls, "ns3::FifoQueueDisc");
     }
+
     tch.Install(ap_devices[0]);
     Ptr<QueueDisc> root_qdisc = ap.Get(0)->GetObject<TrafficControlLayer>()->GetRootQueueDiscOnDevice(ap_devices[0].Get(0));
     root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p")); //设置队列的最大长度
+
     if (cc_mode == 0)
     {
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
     }
     else if (cc_mode == 1)
     {
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
         root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MinTh", DoubleValue(150));
         root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MaxTh", DoubleValue(150));
     }
     else if (cc_mode == 2)
     {
         Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer>();
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
         tc->SetAttribute("Ccmode", UintegerValue(2));
         tc->SetAttribute("Kmin", UintegerValue(500));
     }
     else if (cc_mode == 3)
     {
         Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer>();
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
         tc->SetAttribute("Ccmode", UintegerValue(3));
         tc->SetAttribute("Kmin", UintegerValue(300));
         tc->SetAttribute("DeviceRate", UintegerValue(650));
@@ -327,7 +334,6 @@ int main(int argc, char *argv[])
 
     // void printCurrentSize(Ptr<QueueDisc> root);
     // Simulator::Schedule(Seconds(0.1), &printCurrentSize, root);
-
     // End Trace
 
     // Start Run Simulation
