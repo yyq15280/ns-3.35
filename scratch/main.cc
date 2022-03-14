@@ -57,7 +57,7 @@ static void TraceThput(string thput_tr_file_name, Ptr<PointToPointNetDevice> dev
 
 int main(int argc, char *argv[])
 {
-    uint32_t cc_mode = 0;
+    uint32_t cc_mode = 3;
 
     // Config::SetDefault ("ns3::WifiMacQueue::MaxSize", QueueSizeValue (QueueSize ("100p")));  // default 500p
     // Config::SetDefault ("ns3::WifiMacQueue::MaxDelay", TimeValue (MilliSeconds (1000)));
@@ -243,25 +243,25 @@ int main(int argc, char *argv[])
 
     if (cc_mode == 0)
     {
-        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
+        // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
     }
     else if (cc_mode == 1)
     {
-        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
+        // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
         root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MinTh", DoubleValue(150));
         root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MaxTh", DoubleValue(150));
     }
     else if (cc_mode == 2)
     {
         Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer>();
-        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
+        // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
         tc->SetAttribute("Ccmode", UintegerValue(2));
         tc->SetAttribute("Kmin", UintegerValue(500));
     }
     else if (cc_mode == 3)
     {
         Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer>();
-        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
+        // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
         tc->SetAttribute("Ccmode", UintegerValue(3));
         tc->SetAttribute("Kmin", UintegerValue(300));
         tc->SetAttribute("DeviceRate", UintegerValue(650));
