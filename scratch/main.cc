@@ -206,9 +206,9 @@ int main(int argc, char *argv[])
         mobility[i].Install(ap.Get(i)); //安装在不同的坐标上
         mobility[i].Install(wifi_nodes[i]);
     }
-
-    // install queue disc
-    // To install a queue disc other than the default one, it is necessary to install such queue disc before an IP address is assigned to the device
+    // gggggggggggggggggg
+    //  install queue disc
+    //  To install a queue disc other than the default one, it is necessary to install such queue disc before an IP address is assigned to the device
 
     // TrafficControlHelper tchWifi;
     // tchWifi.SetRootQueueDisc ("ns3::FifoQueueDisc", "MaxSize", StringValue ("5p"));
