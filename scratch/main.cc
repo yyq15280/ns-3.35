@@ -57,33 +57,37 @@ static void TraceThput(string thput_tr_file_name, Ptr<PointToPointNetDevice> dev
 
 int main(int argc, char *argv[])
 {
-    uint32_t cc_mode = 3;
+    uint32_t cc_mode = 5;
 
     // Config::SetDefault ("ns3::WifiMacQueue::MaxSize", QueueSizeValue (QueueSize ("100p")));  // default 500p
     // Config::SetDefault ("ns3::WifiMacQueue::MaxDelay", TimeValue (MilliSeconds (1000)));
 
     if (cc_mode == 0)
     {
-        Config::SetDefault("ns3::TcpL4Protocol::SocketType", StringValue("ns3::TcpNewReno")); //更改拥塞控制算法，在ns335中默认的是cubic
+        Config::SetDefault("ns3::TcpL4Protocol::SocketType", StringValue("ns3::TcpNewReno"));
     }
     else if (cc_mode == 1)
     {
-        Config::SetDefault("ns3::TcpL4Protocol::SocketType", StringValue("ns3::TcpCubic"));
-        Config::SetDefault("ns3::TcpSocketBase::UseEcn", StringValue("On"));
-        Config::SetDefault("ns3::RedQueueDisc::UseEcn", BooleanValue(true));
-        Config::SetDefault("ns3::RedQueueDisc::UseHardDrop", BooleanValue(false));
-        Config::SetDefault("ns3::RedQueueDisc::Gentle", BooleanValue(false));
-        Config::SetDefault("ns3::RedQueueDisc::QW", DoubleValue(1)); // instant queue
+        Config::SetDefault("ns3::TcpL4Protocol::SocketType", StringValue("ns3::TcpNewReno"));
     }
+
     else if (cc_mode == 2)
     {
         Config::SetDefault("ns3::TcpL4Protocol::SocketType", StringValue("ns3::TcpCubic"));
-        Config::SetDefault("ns3::TcpSocketBase::UseEcn", StringValue("On"));
     }
     else if (cc_mode == 3)
     {
-        Config::SetDefault("ns3::TcpL4Protocol::SocketType", StringValue("ns3::TcpNewReno"));
+        Config::SetDefault("ns3::TcpL4Protocol::SocketType", StringValue("ns3::TcpCubic"));
     }
+    else if (cc_mode == 4)
+    {
+        Config::SetDefault("ns3::TcpL4Protocol::SocketType", StringValue("ns3::TcpBbr"));
+    }
+    else if (cc_mode == 5)
+    {
+        Config::SetDefault("ns3::TcpL4Protocol::SocketType", StringValue("ns3::TcpBbr"));
+    }
+
     Config::SetDefault("ns3::TcpSocket::InitialCwnd", UintegerValue(10));      //更改tcp初始拥塞窗口大小
     Config::SetDefault("ns3::TcpSocket::SndBufSize", UintegerValue(67108864)); //传输层用socket来控制，socket里有buffer 先发到buffer里面，默认比较小，所以设置高一些
     Config::SetDefault("ns3::TcpSocket::RcvBufSize", UintegerValue(67108864));
@@ -134,16 +138,19 @@ int main(int argc, char *argv[])
     p2p_1.SetChannelAttribute("Delay", StringValue("9ms"));
     NetDeviceContainer p2p_1_devices;
     p2p_1_devices = p2p_1.Install(remote_servers.Get(0), core_switches.Get(0));
+
     PointToPointHelper p2p_2;
     p2p_2.SetDeviceAttribute("DataRate", StringValue(rate_2));
     p2p_2.SetChannelAttribute("Delay", StringValue(channel_delay));
     NetDeviceContainer p2p_2_devices;
     p2p_2_devices = p2p_2.Install(core_switches.Get(0), convergence_switches.Get(0));
+
     PointToPointHelper p2p_3;
     p2p_3.SetDeviceAttribute("DataRate", StringValue(rate_3));
     p2p_3.SetChannelAttribute("Delay", StringValue(channel_delay));
     NetDeviceContainer p2p_3_devices;
     p2p_3_devices = p2p_3.Install(convergence_switches.Get(0), access_switches.Get(0));
+
     PointToPointHelper p2p_4;
     p2p_4.SetDeviceAttribute("DataRate", StringValue(rate_4));
     p2p_4.SetChannelAttribute("Delay", StringValue(channel_delay));
@@ -172,6 +179,7 @@ int main(int argc, char *argv[])
                                  "DataMode", StringValue("HeMcs11"),
                                  "ControlMode", StringValue("HeMcs11"));
     // wifi.SetRemoteStationManager("ns3::MinstrelHtWifiManager");
+
     WifiMacHelper wifi_mac;
     vector<NetDeviceContainer> wifi_nodes_devices(ap_num);
     vector<NetDeviceContainer> ap_devices(ap_num);
@@ -206,7 +214,6 @@ int main(int argc, char *argv[])
         mobility[i].Install(ap.Get(i)); //安装在不同的坐标上
         mobility[i].Install(wifi_nodes[i]);
     }
-    // gggggggggggggggggg
     //  install queue disc
     //  To install a queue disc other than the default one, it is necessary to install such queue disc before an IP address is assigned to the device
 
@@ -234,7 +241,15 @@ int main(int argc, char *argv[])
     }
     else if (cc_mode == 3)
     {
+        tch.AddChildQueueDiscs(handle, cls, "ns3::RedQueueDisc");
+    }
+    else if (cc_mode == 4)
+    {
         tch.AddChildQueueDiscs(handle, cls, "ns3::FifoQueueDisc");
+    }
+    else if (cc_mode == 5)
+    {
+        tch.AddChildQueueDiscs(handle, cls, "ns3::RedQueueDisc");
     }
 
     tch.Install(ap_devices[0]);
@@ -248,23 +263,44 @@ int main(int argc, char *argv[])
     else if (cc_mode == 1)
     {
         // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
-        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MinTh", DoubleValue(150));
-        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MaxTh", DoubleValue(150));
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MinTh", DoubleValue(300));
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MaxTh", DoubleValue(900));
     }
     else if (cc_mode == 2)
     {
-        Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer>();
-        // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
-        tc->SetAttribute("Ccmode", UintegerValue(2));
-        tc->SetAttribute("Kmin", UintegerValue(500));
+        // Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer>();
+        // // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
+        // tc->SetAttribute("Ccmode", UintegerValue(2));
+        // tc->SetAttribute("Kmin", UintegerValue(500));
     }
     else if (cc_mode == 3)
     {
-        Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer>();
-        // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
-        tc->SetAttribute("Ccmode", UintegerValue(3));
-        tc->SetAttribute("Kmin", UintegerValue(300));
-        tc->SetAttribute("DeviceRate", UintegerValue(650));
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MinTh", DoubleValue(300));
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MaxTh", DoubleValue(900));
+        // Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer>();
+        // // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
+        // tc->SetAttribute("Ccmode", UintegerValue(3));
+        // tc->SetAttribute("Kmin", UintegerValue(300));
+        // tc->SetAttribute("DeviceRate", UintegerValue(650));
+    }
+    else if (cc_mode == 4)
+    {
+
+        // Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer>();
+        // // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
+        // tc->SetAttribute("Ccmode", UintegerValue(3));
+        // tc->SetAttribute("Kmin", UintegerValue(300));
+        // tc->SetAttribute("DeviceRate", UintegerValue(650));
+    }
+    else if (cc_mode == 5)
+    {
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MinTh", DoubleValue(300));
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MaxTh", DoubleValue(900));
+        // Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer>();
+        // // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
+        // tc->SetAttribute("Ccmode", UintegerValue(3));
+        // tc->SetAttribute("Kmin", UintegerValue(300));
+        // tc->SetAttribute("DeviceRate", UintegerValue(650));
     }
 
     // assign IP address 分配ip
@@ -297,7 +333,7 @@ int main(int argc, char *argv[])
     // End create topo
 
     // Start create flow 创建app
-    double simulationTime = 5; // seconds
+    double simulationTime = 8.0; // seconds
     double appStartTime = 2.0;
     vector<ApplicationContainer> sinkAppA(ap_num);
     vector<ApplicationContainer> sourceAppA(ap_num);
