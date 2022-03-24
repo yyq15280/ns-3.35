@@ -8,6 +8,9 @@
 #include "ns3/applications-module.h"
 #include "ns3/traffic-control-module.h"
 #include <ctime>
+// #include "random-walk-2d-mobility-model.h"
+// #include "ns3/pointer.h"
+// #include "ns3/log.h"
 
 using namespace ns3;
 using namespace std;
@@ -57,7 +60,7 @@ static void TraceThput(string thput_tr_file_name, Ptr<PointToPointNetDevice> dev
 
 int main(int argc, char *argv[])
 {
-    uint32_t cc_mode = 5;
+    uint32_t cc_mode = 3;
 
     // Config::SetDefault ("ns3::WifiMacQueue::MaxSize", QueueSizeValue (QueueSize ("100p")));  // default 500p
     // Config::SetDefault ("ns3::WifiMacQueue::MaxDelay", TimeValue (MilliSeconds (1000)));
@@ -135,7 +138,8 @@ int main(int argc, char *argv[])
     // create wired connect
     PointToPointHelper p2p_1;
     p2p_1.SetDeviceAttribute("DataRate", StringValue(rate_1)); //设置网卡速率
-    p2p_1.SetChannelAttribute("Delay", StringValue("9ms"));
+    // p2p_1.SetChannelAttribute("Delay", StringValue("9ms"));
+    p2p_1.SetChannelAttribute("Delay", StringValue("100ms"));
     NetDeviceContainer p2p_1_devices;
     p2p_1_devices = p2p_1.Install(remote_servers.Get(0), core_switches.Get(0));
 
@@ -200,20 +204,44 @@ int main(int argc, char *argv[])
     // std::cout<<DynamicCast<WifiNetDevice>(ap_devices[0].Get(0))->GetPhy()->GetChannelWidth()<<std::endl;
     Config::Set("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/HeConfiguration/GuardInterval", TimeValue(NanoSeconds(800))); //设置间隔 间隔越小 吞吐越高
 
-    // mobility.
+    // mobility
     vector<MobilityHelper> mobility(ap_num);
     vector<Ptr<ListPositionAllocator>> positionAlloc(ap_num);
     for (uint32_t i = 0; i < ap_num; i++)
     {
         positionAlloc[i] = CreateObject<ListPositionAllocator>();
         positionAlloc[i]->Add(Vector(0.0, i * 50.0, 0.0));
-        positionAlloc[i]->Add(Vector(3.0, i * 50.0, 0.0));
         positionAlloc[i]->Add(Vector(-3.0, i * 50.0, 0.0));
+        positionAlloc[i]->Add(Vector(3.0, i * 50.0, 0.0));
         mobility[i].SetPositionAllocator(positionAlloc[i]);
         mobility[i].SetMobilityModel("ns3::ConstantPositionMobilityModel");
-        mobility[i].Install(ap.Get(i)); //安装在不同的坐标上
+        mobility[i].Install(ap.Get(i));
         mobility[i].Install(wifi_nodes[i]);
     }
+
+    // MobilityHelper mobility1;
+    // MobilityHelper mobility2;
+    // mobility1.SetPositionAllocator("ns3::GridPositionAllocator",
+    //                                "MinX", DoubleValue(0.0),
+    //                                "MinY", DoubleValue(0.0),
+    //                                "DeltaX", DoubleValue(5.0),
+    //                                "DeltaY", DoubleValue(5.0),
+    //                                "GridWidth", UintegerValue(1),
+    //                                "LayoutType", StringValue("RowFirst"));
+    // mobility1.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+    // mobility1.Install(ap.Get(0));
+
+    // mobility2.SetPositionAllocator("ns3::GridPositionAllocator",
+    //                                "MinX", DoubleValue(0.0),
+    //                                "MinY", DoubleValue(0.0),
+    //                                "DeltaX", DoubleValue(5.0),
+    //                                "DeltaY", DoubleValue(5.0),
+    //                                "GridWidth", UintegerValue(1),
+    //                                "LayoutType", StringValue("RowFirst"));
+
+    // mobility2.SetMobilityModel("ns3::ConstantVelocityMobilityModel", );
+    // mobility2.Install(wifi_nodes[0]);
+
     //  install queue disc
     //  To install a queue disc other than the default one, it is necessary to install such queue disc before an IP address is assigned to the device
 
@@ -263,8 +291,8 @@ int main(int argc, char *argv[])
     else if (cc_mode == 1)
     {
         // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
-        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MinTh", DoubleValue(300));
-        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MaxTh", DoubleValue(900));
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MinTh", DoubleValue(150));
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MaxTh", DoubleValue(150));
     }
     else if (cc_mode == 2)
     {
@@ -275,8 +303,8 @@ int main(int argc, char *argv[])
     }
     else if (cc_mode == 3)
     {
-        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MinTh", DoubleValue(300));
-        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MaxTh", DoubleValue(900));
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MinTh", DoubleValue(150));
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MaxTh", DoubleValue(150));
         // Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer>();
         // // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
         // tc->SetAttribute("Ccmode", UintegerValue(3));
@@ -285,7 +313,6 @@ int main(int argc, char *argv[])
     }
     else if (cc_mode == 4)
     {
-
         // Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer>();
         // // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
         // tc->SetAttribute("Ccmode", UintegerValue(3));
@@ -294,8 +321,8 @@ int main(int argc, char *argv[])
     }
     else if (cc_mode == 5)
     {
-        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MinTh", DoubleValue(300));
-        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MaxTh", DoubleValue(900));
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MinTh", DoubleValue(150));
+        root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetAttribute("MaxTh", DoubleValue(150));
         // Ptr<TrafficControlLayer> tc = ap.Get(0)->GetObject<TrafficControlLayer>();
         // // root_qdisc->GetQueueDiscClass(0)->GetQueueDisc()->SetMaxSize(QueueSize("7500p"));
         // tc->SetAttribute("Ccmode", UintegerValue(3));
@@ -337,6 +364,7 @@ int main(int argc, char *argv[])
     double appStartTime = 2.0;
     vector<ApplicationContainer> sinkAppA(ap_num);
     vector<ApplicationContainer> sourceAppA(ap_num);
+
     for (uint32_t i = 0; i < ap_num; i++)
     {
         uint16_t port = 50000;
